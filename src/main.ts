@@ -17,6 +17,47 @@ async function main() {
     console.info(`Got WebGPU device`);
   }
 
+  /*
+https://github.com/ggerganov/llama.cpp/blob/628b299106d1e9476fdecb3cbe546bf5c60f1b89/ggml-metal.metal#L5750-L5782
+//     const uint il = (BLOCKS_IN_QUANT/4)*(gl_SubgroupInvocationID%2);
+
+static inline uchar2 get_scale_min_k4_just2(int j, int k, device const uchar * q) {
+    return j < 4 ? uchar2{uchar(q[j+0+k] & 63), uchar(q[j+4+k] & 63)}
+                 : uchar2{uchar((q[j+4+k] & 0xF) | ((q[j-4+k] & 0xc0) >> 2)), uchar((q[j+4+k] >> 4) | ((q[j-0+k] & 0xc0) >> 2))};
+}
+
+
+template <typename type4x4>
+void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg) {
+    device const uchar * q = xb->qs;
+
+
+#if QK_K == 256
+    short is = (il/4) * 2;
+    q = q + (il/4) * 32 + 16 * (il&1);
+    il = il & 3;
+    const uchar2 sc = get_scale_min_k4_just2(is, il/2, xb->scales);
+    const float d   = il < 2 ? xb->d : xb->d / 16.h;
+    const float min = xb->dmin;
+    const float dl = d * sc[0];
+    const float ml = min * sc[1];
+#else
+    (void) get_scale_min_k4_just2;
+
+
+    q = q + 16 * (il&1);
+    device const uint8_t * s = xb->scales;
+    device const half2 * dh = (device const half2 *)xb->d;
+    const float2 d = (float2)dh[0];
+    const float dl = il<2 ? d[0] * (s[0]&0xF) : d[0] * (s[1]&0xF)/16.h;
+    const float ml = il<2 ? d[1] * (s[0]>>4)  : d[1] * (s[1]>>4);
+#endif
+    const ushort mask = il<2 ? 0x0F : 0xF0;
+    for (int i = 0; i < 16; ++i) {
+        reg[i/4][i%4] = dl * (q[i] & mask) - ml;
+    }
+}
+*/
   const module = device.createShaderModule({
     label: "dequant_q4k compute module",
     code: `
@@ -39,6 +80,8 @@ async function main() {
     @group(0) @binding(4)
     var<storage, read_write> dequantised: array<f32>;
 
+    const K_SCALE_SIZE = 12;
+
     struct Debug {
       global_id: vec3u,
       local_id: vec3u
@@ -56,6 +99,8 @@ async function main() {
 
       let ix = 0;
       let d = ds[ix];
+
+      
       dequantised[0] = d;
 
       
