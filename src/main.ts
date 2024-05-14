@@ -21,6 +21,12 @@ async function main() {
 https://github.com/ggerganov/llama.cpp/blob/628b299106d1e9476fdecb3cbe546bf5c60f1b89/ggml-metal.metal#L5750-L5782
 //     const uint il = (BLOCKS_IN_QUANT/4)*(gl_SubgroupInvocationID%2);
 
+
+
+// GGML_TYPE_Q4_K - "type-1" 4-bit quantization in super-blocks containing 8 blocks, 
+// each block having 32 weights. 
+// Scales and mins are quantized with 6 bits. This ends up using 4.5 bpw.
+
 static inline uchar2 get_scale_min_k4_just2(int j, int k, device const uchar * q) {
     return j < 4 ? uchar2{uchar(q[j+0+k] & 63), uchar(q[j+4+k] & 63)}
                  : uchar2{uchar((q[j+4+k] & 0xF) | ((q[j-4+k] & 0xc0) >> 2)), uchar((q[j+4+k] >> 4) | ((q[j-0+k] & 0xc0) >> 2))};
@@ -83,25 +89,27 @@ void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg
     const K_SCALE_SIZE = 12;
 
     struct Debug {
-      global_id: vec3u,
-      local_id: vec3u
+      ix: array<u32,256 * 4>
     }
     @group(0) @binding(5)
     var<storage, read_write> debug: Debug;
     
     
-    @compute @workgroup_size(1) fn dequant_q4k(
+    // 
+    @compute @workgroup_size(64) fn dequant_q4k(
       @builtin(global_invocation_id) global_id: vec3u,
-      @builtin(local_invocation_id) local_id: vec3u) {
+      @builtin(local_invocation_id) local_id: vec3u,
+      @builtin(workgroup_id) workgroup_id: vec3u) {
 
-      debug.global_id = global_id;
-      debug.local_id = local_id;
+      var i = workgroup_id.x * 4;
+      debug.ix[i] = workgroup_id.x;
+      debug.ix[i + 1] = workgroup_id.y;
+      debug.ix[i + 2] = workgroup_id.z;
 
-      let ix = 0;
-      let d = ds[ix];
+      let d = ds[i];
 
       
-      dequantised[0] = d;
+      dequantised[i] = d;
 
       
     }
@@ -186,7 +194,7 @@ void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
   });
 
-  const debug = new Uint32Array(8);
+  const debug = new Uint32Array(256 * 4);
   const debugBuffer = device.createBuffer({
     label: "debug buffer",
     size: debug.byteLength,
@@ -231,7 +239,8 @@ void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg
   });
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
-  pass.dispatchWorkgroups(input.length);
+  // pass.dispatchWorkgroups(input.length);
+  pass.dispatchWorkgroups(256);
   pass.end();
 
   encoder.copyBufferToBuffer(
