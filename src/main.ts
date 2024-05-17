@@ -99,14 +99,18 @@ void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg
     @compute @workgroup_size(64) fn dequant_q4k(
       @builtin(global_invocation_id) global_id: vec3u,
       @builtin(local_invocation_id) local_id: vec3u,
+      @builtin(local_invocation_index) local_invocation_index: u32,
+      @builtin(num_workgroups) num_workgroups: vec3<u32>,
       @builtin(workgroup_id) workgroup_id: vec3u) {
 
-      var i = workgroup_id.x * 4;
-      debug.ix[i] = workgroup_id.x;
-      debug.ix[i + 1] = workgroup_id.y;
-      debug.ix[i + 2] = workgroup_id.z;
+      var i = 
+        workgroup_id.x * workgroup_id.y * 64 +
+        workgroup_id.y * 64 + 
+        local_invocation_index;
+      
 
       let d = ds[i];
+      debug.ix[i] = i;
 
       
       dequantised[i] = d;
@@ -194,7 +198,7 @@ void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
   });
 
-  const debug = new Uint32Array(256 * 4);
+  const debug = new Uint32Array(256 * 256);
   const debugBuffer = device.createBuffer({
     label: "debug buffer",
     size: debug.byteLength,
@@ -240,7 +244,7 @@ void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
   // pass.dispatchWorkgroups(input.length);
-  pass.dispatchWorkgroups(256);
+  pass.dispatchWorkgroups(256, 4);
   pass.end();
 
   encoder.copyBufferToBuffer(
